@@ -1,0 +1,8 @@
+gradio
+python-dotenv
+langchain
+langchain-deepseek
+langgraph
+langchain-anthropic
+tavily-python
+ipython
