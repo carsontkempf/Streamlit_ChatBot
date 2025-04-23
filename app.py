@@ -95,7 +95,6 @@ def chat_fn(message: str, model: str) -> str:
 
     # Always include the LLM as a node
     used_tools = [model.lower()]
-    used_templates = []
 
     # Phase 1: LLM generates response or tool call
     ai_msg: AIMessage = llm.invoke([user_msg])
@@ -113,21 +112,25 @@ def chat_fn(message: str, model: str) -> str:
             raw_args = call.get("args", "{}")
         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
 
-        tool_map = {
-            "tavily_search_tool": tavily_search_tool,
-            "summarize_tool":    summarize_tool,
-            "ask":               ask,
-        }
-        tool_fn = tool_map.get(name)
-        if not tool_fn:
-            output = f"Unknown tool: {name}"
+        # Chain: deepseek -> tavily_search_tool -> summarize_tool
+        if name == "ask":
+            # Run search
+            raw = tavily_search_tool.invoke(message, top_n=2)
+            # Then summarize
+            output = summarize_tool.invoke(raw, max_words=150)
+            used_tools += ["tavily_search_tool", "summarize_tool"]
+        # If Direct tavily_search_tool call → chain summarize
+        elif name == "tavily_search_tool":
+            raw = tavily_search_tool.invoke(message, top_n=args.get("top_n", 2))
+            output = summarize_tool.invoke(raw, max_words=150)
+            used_tools += ["tavily_search_tool", "summarize_tool"]
+        # If direct summarize_tool call → single step
+        elif name == "summarize_tool":
+            raw = summarize_tool.invoke(message, max_words=args.get("max_words", 150))
+            output = raw
+            used_tools.append("summarize_tool")
         else:
-            output = invoke_tool_graph(tool_fn, ai_msg)
-            used_tools.append(name)
-            # If using 'ask', determine which template was used
-            if name == "ask":
-                tpl_key = _select_template(message)
-                used_templates = [f"{tpl_key}_template"]
+            output = f"Unknown tool: {name}"
     else:
         # No tool → simple LLM response
         output = ai_msg.content
@@ -135,14 +138,14 @@ def chat_fn(message: str, model: str) -> str:
     # Deduplicate used_tools
     used_tools = list(dict.fromkeys(used_tools))
 
-    # Build and render dynamic invocation graph
+    # Build sequential edges: start -> first -> ... -> last -> end_node
+    seq = used_tools
     edges = []
-    for tn in used_tools:
-        edges.append(f"start --> {tn};")
-        edges.append(f"{tn} --> end_node;")
-    for tpl in used_templates:
-        edges.append(f"start --> {tpl};")
-        edges.append(f"{tpl} --> end_node;")
+    if seq:
+        edges.append(f"start --> {seq[0]};")
+        for i in range(len(seq)-1):
+            edges.append(f"{seq[i]} --> {seq[i+1]};")
+        edges.append(f"{seq[-1]} --> end_node;")
     mermaid_code = (
         "graph LR;\n"
         "start((start));\n"
