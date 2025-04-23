@@ -1,7 +1,7 @@
 import os
 import json
 from dotenv import load_dotenv
-from langchain_core.tools import tool
+from langchain_core.tools import tool, BaseTool
 from tavily import TavilyClient
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_deepseek import ChatDeepSeek
@@ -59,7 +59,7 @@ def _select_template(q: str) -> str:
 def ask(question: str, top_n: int = 2, max_words: int = 150, servings: int = 2) -> str:
     key = _select_template(question)
     if key == "summarize":
-        return summarize_tool(question, max_words)
+        return summarize_tool.invoke(question, max_words=max_words)
     if key in ("define", "recipe"):
         prompt: ChatPromptTemplate = templates.PROMPTS[key]
         vars_dict = (
@@ -69,7 +69,8 @@ def ask(question: str, top_n: int = 2, max_words: int = 150, servings: int = 2) 
         )
         msg_list = prompt.format(**vars_dict)
         return llm.invoke(msg_list).content
-    return tavily_search_tool(question, top_n)
+    # Use the new invoke API for tools
+    return tavily_search_tool.invoke(question, top_n=top_n)
 
 # ── export list ───────────────────────────────────────────────────────────────
 tools = [tavily_search_tool, summarize_tool, ask]
