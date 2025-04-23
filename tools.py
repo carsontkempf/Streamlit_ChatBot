@@ -69,8 +69,12 @@ def ask(question: str, top_n: int = 2, max_words: int = 150, servings: int = 2) 
         )
         msg_list = prompt.format(**vars_dict)
         return llm.invoke(msg_list).content
-    # Use the new invoke API for tools
-    return tavily_search_tool.invoke(question, top_n=top_n)
+    # Fallback: run a web search, then summarize with DeepSeek for accuracy
+    raw = tavily_search_tool.invoke(question, top_n=top_n)
+    # Build a prompt to summarize the search results
+    prompt = templates.PROMPTS["default"]
+    msg_list = prompt.format(question=f"{question}\nSearch results:\n{raw}")
+    return llm.invoke(msg_list).content
 
 # ── export list ───────────────────────────────────────────────────────────────
 tools = [tavily_search_tool, summarize_tool, ask]

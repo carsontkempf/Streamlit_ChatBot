@@ -12,7 +12,7 @@ from langgraph.prebuilt import ToolNode
 
 from langchain_deepseek import ChatDeepSeek
 from langchain_anthropic import ChatAnthropic
-from tools import tools, tavily_search_tool, summarize_tool, ask
+from tools import tools, tavily_search_tool, summarize_tool, ask, _select_template
 from templates import PROMPTS
 
 
@@ -93,14 +93,17 @@ def chat_fn(message: str, model: str) -> str:
     user_msg = HumanMessage(content=message)
     llm = llm_deepseek if model == "DeepSeek" else llm_claude
 
+    # Always include the LLM as a node
+    used_tools = [model.lower()]
+    used_templates = []
+
     # Phase 1: LLM generates response or tool call
     ai_msg: AIMessage = llm.invoke([user_msg])
 
-    # Phase 2: If a tool was requested, extract and run it
+    # Determine if a tool was requested
     tool_calls = getattr(ai_msg, "tool_calls", None)
     if tool_calls:
         call = tool_calls[0]
-        # Determine tool name and arguments from either structure
         if "function" in call:
             func_info = call["function"]
             name = func_info.get("name")
@@ -117,25 +120,40 @@ def chat_fn(message: str, model: str) -> str:
         }
         tool_fn = tool_map.get(name)
         if not tool_fn:
-            return f"Unknown tool: {name}"
+            output = f"Unknown tool: {name}"
+        else:
+            output = invoke_tool_graph(tool_fn, ai_msg)
+            used_tools.append(name)
+            # If using 'ask', determine which template was used
+            if name == "ask":
+                tpl_key = _select_template(message)
+                used_templates = [f"{tpl_key}_template"]
+    else:
+        # No tool → simple LLM response
+        output = ai_msg.content
 
-        return invoke_tool_graph(tool_fn, ai_msg)
+    # Deduplicate used_tools
+    used_tools = list(dict.fromkeys(used_tools))
 
-    # Build and render invocation graph in Streamlit using Mermaid.js
+    # Build and render dynamic invocation graph
     edges = []
-    for tool_name in ["tavily_search_tool", "summarize_tool", "ask"]:
-        edges.append(f"start --> {tool_name};")
-        edges.append(f"{tool_name} --> end_node;")
-    for tpl in PROMPTS:
-        node = f"{tpl}_template"
-        edges.append(f"start --> {node};")
-        edges.append(f"{node} --> end_node;")
-    mermaid_code = "graph LR;\nstart((start));\nend_node((end));\n" + "\n".join(edges) + ";"
+    for tn in used_tools:
+        edges.append(f"start --> {tn};")
+        edges.append(f"{tn} --> end_node;")
+    for tpl in used_templates:
+        edges.append(f"start --> {tpl};")
+        edges.append(f"{tpl} --> end_node;")
+    mermaid_code = (
+        "graph LR;\n"
+        "start((start));\n"
+        "end_node((end));\n"
+        + "\n".join(edges) +
+        ";"
+    )
     st.caption("Invocation Graph")
     st_mermaid(mermaid_code)
 
-    # No tool requested → return raw content
-    return ai_msg.content
+    return output
 
 st.title("🧠 LangGraph LLM Chat")
 model = st.radio("Select model", ["DeepSeek", "Claude"])
