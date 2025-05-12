@@ -2,6 +2,12 @@
     "files.exclude": {
         "__pycache__": true,
         ".venv": true,
-        ".vscode": true
+        ".vscode": true,
+        "Resources": true,
+        ".env": true,
+        "requirements.txt": true,
+        "tools/__pycache__": true,
+        ".pytest_cache": true,
+        "tests/__pycache__": true
     }
 }
