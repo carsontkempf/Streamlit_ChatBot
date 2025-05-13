@@ -16,8 +16,8 @@ STREAMLIT_APP_URL = 'http://localhost:8501'
 APP_DIRECTORY = Path(__file__).parent.parent
 
 # Define locators for your Streamlit elements here
-# Example: TEXTBOX_LOCATOR = (By.ID, "my_streamlit_textbox_id")
-# Example: SUBMIT_BUTTON_LOCATOR = (By.XPATH, '//button[contains(text(),"Submit")]')
+TEXT_AREA_LOCATOR = (By.CSS_SELECTOR, "textarea[aria-label='Enter your message:']")
+SUBMIT_BUTTON_LOCATOR = (By.XPATH, "//button[.//p[text()='Submit']]")
 
 @pytest.fixture(scope="session") # Run once per test session
 def streamlit_server():
@@ -86,12 +86,19 @@ def test_fill_form_and_submit(streamlit_server, driver):
     """
     driver.get(STREAMLIT_APP_URL)
     
-    # Wait for 30 seconds as requested, to observe the page
-    time.sleep(30)
+    # Find the text area using the defined locator
+    text_area = driver.find_element(*TEXT_AREA_LOCATOR)
     
-    # In future steps, you would add interactions here:
-    # text_area = driver.find_element(*TEXT_AREA_LOCATOR)
-    # text_area.send_keys("Hello Streamlit")
-    # submit_button = driver.find_element(*SUBMIT_BUTTON_LOCATOR)
-    # submit_button.click()
+    # Input the desired text
+    text_area.send_keys("What is the weather like in Maryville, MO?")
+    
+    # Wait for 3 seconds after text input
+    time.sleep(3)
+    
+    # Find the submit button and click it
+    submit_button = driver.find_element(*SUBMIT_BUTTON_LOCATOR)
+    submit_button.click()
+    
+    # Let the user see the result of the submission
+    time.sleep(10) 
     # ... and assertions
