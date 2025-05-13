@@ -5,23 +5,29 @@ from tools import tools as tool_list
 
 __all__ = ["get_llm"]
 
-if tool_list:
-    # Initialize DeepSeek LLM with tools
-    llm_deepseek = ChatDeepSeek(
-        model="deepseek-chat",
-        api_key=DEEPSEEK_API_KEY,
-        temperature=0.25,
-        max_tokens=8192,
-    ).bind_tools(tool_list)
+
+# Initialize DeepSeek LLM with tools
+llm_deepseek = ChatDeepSeek(
+    model="deepseek-chat",
+    api_key=DEEPSEEK_API_KEY,
+    temperature=0.25,
+    max_tokens=8192,
+)
 
 if tool_list:
-    # Initialize Claude LLM with tools
-    llm_claude = ChatAnthropic(
-        api_key=ANTHROPIC_API_KEY,
-        model="claude-3-7-sonnet-20250219",
-        temperature=0.0,
-        max_tokens=1024,
-    ).bind_tools(tool_list)
+    llm_deepseek.bind_tools(tool_list)
+
+
+# Initialize Claude LLM with tools
+llm_claude = ChatAnthropic(
+    api_key=ANTHROPIC_API_KEY,
+    model="claude-3-7-sonnet-20250219",
+    temperature=0.0,
+    max_tokens=1024,
+)
+
+if tool_list:
+    llm_claude.bind_tools(tool_list)
 
 def get_llm(model_name: str):
     """
