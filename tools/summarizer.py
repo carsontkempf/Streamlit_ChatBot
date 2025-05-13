@@ -11,3 +11,4 @@ def summarize_tool(text: str, max_words: int = 150) -> str:
     if len(words) <= max_words:
         return text
     return " ".join(words[:max_words]) + "..."
+ 

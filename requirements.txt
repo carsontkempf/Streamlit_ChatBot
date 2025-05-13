@@ -10,3 +10,4 @@ streamlit
 pytest
 selenium
 webdriver-manager
+selenium==4.31.0
