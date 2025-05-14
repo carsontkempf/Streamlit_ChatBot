@@ -6,6 +6,14 @@ import logging # Import the logging module
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
+# Counter for generating unique node IDs for Mermaid
+_node_id_counter = 0
+
+def _get_unique_node_id():
+    global _node_id_counter
+    _node_id_counter += 1
+    return f"mmnode{_node_id_counter}" # mmnode for mindmap node
+
 def build_mermaid(tool_entries: List[dict]) -> str:
     if not tool_entries:
         return "mindmap\n  root((No tool invocation steps to graph.))"
@@ -14,6 +22,10 @@ def build_mermaid(tool_entries: List[dict]) -> str:
     # Add a root node for the mindmap.
     # Shapes can be: ((circle)), (rounded), [square], default (no brackets)
     mermaid_lines.append("  root((Tool Invocation Flow))") # Main root, level 1 (indent "  ")
+
+    global _node_id_counter
+    _node_id_counter = 0 # Reset counter for each new graph generation
+
 
     # Helper to sanitize text and optionally truncate
     def sanitize_for_simple_mindmap_node(text: str, max_len: int = 0) -> str:
@@ -49,35 +61,46 @@ def build_mermaid(tool_entries: List[dict]) -> str:
         tool_node_indent = "  " * tool_node_level
         
         # Tool name as a simple node (less likely to have problematic characters)
+        tool_node_id = _get_unique_node_id()
         entry_name = sanitize_for_simple_mindmap_node(str(entry.get("name", "Unknown Step")), 50)
-        mermaid_lines.append(f"{tool_node_indent}{entry_name}")
+        mermaid_lines.append(f"{tool_node_indent}{tool_node_id}[{entry_name}]")
 
         # Details as children of this tool node
         detail_node_level = tool_node_level + 1
         detail_node_indent = "  " * detail_node_level
         
         original_entry_name = entry.get("name", "Unknown Step") # Use original for condition
-        if original_entry_name == "tool_determination_router":
+        # Note: The original code had a condition for "tool_determination_router"
+        # This example simplifies to the "else" block for brevity, assuming standard tool structure.
+        # If "tool_determination_router" has a different structure, apply similar id[text] changes there.
+        if original_entry_name == "tool_determination_router": # Example for router, adapt as needed
             prompt = sanitize_for_simple_mindmap_node(entry.get("router_llm_prompt", "N/A"), 60)
             raw_resp = sanitize_for_simple_mindmap_node(entry.get("router_llm_raw_response", "N/A"), 60)
             selected_tools = sanitize_for_simple_mindmap_node(str(entry.get("selected_tools_list", [])), 60)
-            mermaid_lines.append(f'{detail_node_indent}LLM Prompt: {prompt}')
-            mermaid_lines.append(f'{detail_node_indent}LLM Raw Resp: {raw_resp}')
-            mermaid_lines.append(f'{detail_node_indent}Selected Tools: {selected_tools}')
+            
+            mermaid_lines.append(f'{detail_node_indent}{_get_unique_node_id()}[LLM Prompt: {prompt}]')
+            mermaid_lines.append(f'{detail_node_indent}{_get_unique_node_id()}[LLM Raw Resp: {raw_resp}]')
+            mermaid_lines.append(f'{detail_node_indent}{_get_unique_node_id()}[Selected Tools: {selected_tools}]')
         else: # Standard tool
             tool_input_str = str(entry.get("tool_input", "N/A"))
             tool_output_str = str(entry.get("tool_output", "N/A"))
             
             # Add "Input:" and "Output:" as simple text parent nodes for clarity
-            mermaid_lines.append(f'{detail_node_indent}Input Details:')
+            input_parent_id = _get_unique_node_id()
+            mermaid_lines.append(f'{detail_node_indent}{input_parent_id}[Input Details:]')
             input_lines = tool_input_str.split('\n')
             for line_num, line_content in enumerate(input_lines[:5]): # Show first 5 lines of input
-                mermaid_lines.append(f'{detail_node_indent}  {sanitize_for_simple_mindmap_node(line_content, 70)}')
+                line_id = _get_unique_node_id()
+                sanitized_line = sanitize_for_simple_mindmap_node(line_content, 70)
+                mermaid_lines.append(f'{detail_node_indent}  {line_id}[{sanitized_line}]')
 
-            mermaid_lines.append(f'{detail_node_indent}Output Details:')
+            output_parent_id = _get_unique_node_id()
+            mermaid_lines.append(f'{detail_node_indent}{output_parent_id}[Output Details:]')
             output_lines = tool_output_str.split('\n')
             for line_num, line_content in enumerate(output_lines[:8]): # Show first 8 lines of output
-                mermaid_lines.append(f'{detail_node_indent}  {sanitize_for_simple_mindmap_node(line_content, 70)}')
+                line_id = _get_unique_node_id()
+                sanitized_line = sanitize_for_simple_mindmap_node(line_content, 70)
+                mermaid_lines.append(f'{detail_node_indent}  {line_id}[{sanitized_line}]')
 
         # Add next tool as a child of the current tool node
         if remaining_entries:

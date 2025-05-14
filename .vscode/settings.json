@@ -15,6 +15,9 @@
         "app.py": true,
         "config.py": true,
         "pytest.ini": true,
-        "Documentation.txt": true
+        "Documentation.txt": true,
+        "chat_service.py": true,
+        "llm.py": true,
+        "tests/__init__.py": true
     }
 }

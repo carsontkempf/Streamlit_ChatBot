@@ -16,6 +16,7 @@ import pyperclip
 import psutil
 import logging
 import threading # Added for subprocess output streaming
+from .test_queries import USER_QUERIES # Import the queries
 import sys # Added for flushing output
 
 
@@ -175,7 +176,8 @@ def get_error_text_if_present(driver: webdriver.Chrome, start_phrase: str, end_p
     except TimeoutException:
         return None
 
-def test_fill_form_and_submit(streamlit_server, driver):
+@pytest.mark.parametrize("user_query", USER_QUERIES)
+def test_fill_form_and_submit(streamlit_server, driver, user_query):
 
     driver.get(STREAMLIT_APP_URL)
 
@@ -193,7 +195,7 @@ def test_fill_form_and_submit(streamlit_server, driver):
     # Find the text area using the defined locator
     text_area = WebDriverWait(driver, 10).until(EC.presence_of_element_located(TEXT_AREA_LOCATOR))
     
-    text_area.send_keys("What is the latest news about the apple lawsuit in 2025?")
+    text_area.send_keys(user_query)
     
     time.sleep(0.75)
     
