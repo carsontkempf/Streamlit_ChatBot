@@ -1,5 +1,7 @@
 {
     "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
         "__pycache__": true,
         ".venv": true,
         ".vscode": true,
@@ -8,6 +10,11 @@
         "requirements.txt": true,
         "tools/__pycache__": true,
         ".pytest_cache": true,
-        "tests/__pycache__": true
+        "tests/__pycache__": true,
+        ".gitignore": true,
+        "app.py": true,
+        "config.py": true,
+        "pytest.ini": true,
+        "Documentation.txt": true
     }
 }

@@ -1,0 +1,985 @@
+LangGraph tools: 
+"
+Add tools¶
+
+To handle queries you chatbot can't answer "from memory", integrate a web search tool. The chatbot can use this tool to find relevant information and provide better responses.
+
+Note
+This tutorial builds on Build a basic chatbot.
+
+Prerequisites¶
+
+Before you start this tutorial, ensure you have the following:
+
+An API key for the Tavily Search Engine.
+1. Install the search engine¶
+
+Install the requirements to use the Tavily Search Engine:
+
+
+pip install -U langchain-tavily
+2. Configure your environment¶
+
+Configure your environment with your search engine API key:
+
+
+_set_env("TAVILY_API_KEY")
+
+TAVILY_API_KEY:  ········
+3. Define the tool¶
+
+Define the web search tool:
+
+API Reference: TavilySearch
+
+
+from langchain_tavily import TavilySearch
+
+tool = TavilySearch(max_results=2)
+tools = [tool]
+tool.invoke("What's a 'node' in LangGraph?")
+The results are page summaries our chat bot can use to answer questions:
+
+
+{'query': "What's a 'node' in LangGraph?",
+'follow_up_questions': None,
+'answer': None,
+'images': [],
+'results': [{'title': "Introduction to LangGraph: A Beginner's Guide - Medium",
+'url': 'https://medium.com/@cplog/introduction-to-langgraph-a-beginners-guide-14f9be027141',
+'content': 'Stateful Graph: LangGraph revolves around the concept of a stateful graph, where each node in the graph represents a step in your computation, and the graph maintains a state that is passed around and updated as the computation progresses. LangGraph supports conditional edges, allowing you to dynamically determine the next node to execute based on the current state of the graph. We define nodes for classifying the input, handling greetings, and handling search queries. def classify_input_node(state): LangGraph is a versatile tool for building complex, stateful applications with LLMs. By understanding its core concepts and working through simple examples, beginners can start to leverage its power for their projects. Remember to pay attention to state management, conditional edges, and ensuring there are no dead-end nodes in your graph.',
+'score': 0.7065353,
+'raw_content': None},
+{'title': 'LangGraph Tutorial: What Is LangGraph and How to Use It?',
+'url': 'https://www.datacamp.com/tutorial/langgraph-tutorial',
+'content': 'LangGraph is a library within the LangChain ecosystem that provides a framework for defining, coordinating, and executing multiple LLM agents (or chains) in a structured and efficient manner. By managing the flow of data and the sequence of operations, LangGraph allows developers to focus on the high-level logic of their applications rather than the intricacies of agent coordination. Whether you need a chatbot that can handle various types of user requests or a multi-agent system that performs complex tasks, LangGraph provides the tools to build exactly what you need. LangGraph significantly simplifies the development of complex LLM applications by providing a structured framework for managing state and coordinating agent interactions.',
+'score': 0.5008063,
+'raw_content': None}],
+'response_time': 1.38}
+4. Define the graph¶
+
+For the StateGraph you created in the first tutorial, add bind_tools on the LLM. This lets the LLM know the correct JSON format to use if it wants to use the search engine.
+
+Let's first select our LLM:
+
+
+OpenAI
+Anthropic
+Azure
+Google Gemini
+AWS Bedrock
+
+pip install -U "langchain[openai]"
+
+import os
+from langchain.chat_models import init_chat_model
+
+os.environ["OPENAI_API_KEY"] = "sk-..."
+
+llm = init_chat_model("openai:gpt-4.1")
+
+We can now incorporate it into a StateGraph:
+
+
+from typing import Annotated
+
+from typing_extensions import TypedDict
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+
+graph_builder = StateGraph(State)
+
+# Modification: tell the LLM which tools it can call
+# highlight-next-line
+llm_with_tools = llm.bind_tools(tools)
+
+def chatbot(state: State):
+    return {"messages": [llm_with_tools.invoke(state["messages"])]}
+
+graph_builder.add_node("chatbot", chatbot)
+5. Create a function to run the tools¶
+
+Now, create a function to run the tools if they are called. Do this by adding the tools to a new node calledBasicToolNode that checks the most recent message in the state and calls tools if the message contains tool_calls. It relies on the LLM's tool_calling support, which is available in Anthropic, OpenAI, Google Gemini, and a number of other LLM providers.
+
+API Reference: ToolMessage
+
+
+import json
+
+from langchain_core.messages import ToolMessage
+
+
+class BasicToolNode:
+    """A node that runs the tools requested in the last AIMessage."""
+
+    def __init__(self, tools: list) -> None:
+        self.tools_by_name = {tool.name: tool for tool in tools}
+
+    def __call__(self, inputs: dict):
+        if messages := inputs.get("messages", []):
+            message = messages[-1]
+        else:
+            raise ValueError("No message found in input")
+        outputs = []
+        for tool_call in message.tool_calls:
+            tool_result = self.tools_by_name[tool_call["name"]].invoke(
+                tool_call["args"]
+            )
+            outputs.append(
+                ToolMessage(
+                    content=json.dumps(tool_result),
+                    name=tool_call["name"],
+                    tool_call_id=tool_call["id"],
+                )
+            )
+        return {"messages": outputs}
+
+
+tool_node = BasicToolNode(tools=[tool])
+graph_builder.add_node("tools", tool_node)
+Note
+If you do not want to build this yourself in the future, you can use LangGraph's prebuilt ToolNode.
+
+6. Define the conditional_edges¶
+
+With the tool node added, now you can define the conditional_edges.
+
+Edges route the control flow from one node to the next. Conditional edges start from a single node and usually contain "if" statements to route to different nodes depending on the current graph state. These functions receive the current graph state and return a string or list of strings indicating which node(s) to call next.
+
+Next, define a router function called route_tools that checks for tool_calls in the chatbot's output. Provide this function to the graph by calling add_conditional_edges, which tells the graph that whenever the chatbot node completes to check this function to see where to go next.
+
+The condition will route to tools if tool calls are present and END if not. Because the condition can return END, you do not need to explicitly set a finish_point this time.
+
+
+def route_tools(
+    state: State,
+):
+    """
+    Use in the conditional_edge to route to the ToolNode if the last message
+    has tool calls. Otherwise, route to the end.
+    """
+    if isinstance(state, list):
+        ai_message = state[-1]
+    elif messages := state.get("messages", []):
+        ai_message = messages[-1]
+    else:
+        raise ValueError(f"No messages found in input state to tool_edge: {state}")
+    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
+        return "tools"
+    return END
+
+
+# The `tools_condition` function returns "tools" if the chatbot asks to use a tool, and "END" if
+# it is fine directly responding. This conditional routing defines the main agent loop.
+graph_builder.add_conditional_edges(
+    "chatbot",
+    route_tools,
+    # The following dictionary lets you tell the graph to interpret the condition's outputs as a specific node
+    # It defaults to the identity function, but if you
+    # want to use a node named something else apart from "tools",
+    # You can update the value of the dictionary to something else
+    # e.g., "tools": "my_tools"
+    {"tools": "tools", END: END},
+)
+# Any time a tool is called, we return to the chatbot to decide the next step
+graph_builder.add_edge("tools", "chatbot")
+graph_builder.add_edge(START, "chatbot")
+graph = graph_builder.compile()
+Note
+You can replace this with the prebuilt tools_condition to be more concise.
+
+7. Visualize the graph (optional)¶
+
+You can visualize the graph using the get_graph method and one of the "draw" methods, like draw_ascii or draw_png. The draw methods each require additional dependencies.
+
+
+from IPython.display import Image, display
+
+try:
+    display(Image(graph.get_graph().draw_mermaid_png()))
+except Exception:
+    # This requires some extra dependencies and is optional
+    pass
+chatbot-with-tools-diagram
+
+8. Ask the bot questions¶
+
+Now you can ask the chatbot questions outside its training data:
+
+
+def stream_graph_updates(user_input: str):
+    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
+        for value in event.values():
+            print("Assistant:", value["messages"][-1].content)
+
+while True:
+    try:
+        user_input = input("User: ")
+        if user_input.lower() in ["quit", "exit", "q"]:
+            print("Goodbye!")
+            break
+
+        stream_graph_updates(user_input)
+    except:
+        # fallback if input() is not available
+        user_input = "What do you know about LangGraph?"
+        print("User: " + user_input)
+        stream_graph_updates(user_input)
+        break
+
+Assistant: [{'text': "To provide you with accurate and up-to-date information about LangGraph, I'll need to search for the latest details. Let me do that for you.", 'type': 'text'}, {'id': 'toolu_01Q588CszHaSvvP2MxRq9zRD', 'input': {'query': 'LangGraph AI tool information'}, 'name': 'tavily_search_results_json', 'type': 'tool_use'}]
+Assistant: [{"url": "https://www.langchain.com/langgraph", "content": "LangGraph sets the foundation for how we can build and scale AI workloads \u2014 from conversational agents, complex task automation, to custom LLM-backed experiences that 'just work'. The next chapter in building complex production-ready features with LLMs is agentic, and with LangGraph and LangSmith, LangChain delivers an out-of-the-box solution ..."}, {"url": "https://github.com/langchain-ai/langgraph", "content": "Overview. LangGraph is a library for building stateful, multi-actor applications with LLMs, used to create agent and multi-agent workflows. Compared to other LLM frameworks, it offers these core benefits: cycles, controllability, and persistence. LangGraph allows you to define flows that involve cycles, essential for most agentic architectures ..."}]
+Assistant: Based on the search results, I can provide you with information about LangGraph:
+
+1. Purpose:
+   LangGraph is a library designed for building stateful, multi-actor applications with Large Language Models (LLMs). It's particularly useful for creating agent and multi-agent workflows.
+
+2. Developer:
+   LangGraph is developed by LangChain, a company known for its tools and frameworks in the AI and LLM space.
+
+3. Key Features:
+   - Cycles: LangGraph allows the definition of flows that involve cycles, which is essential for most agentic architectures.
+   - Controllability: It offers enhanced control over the application flow.
+   - Persistence: The library provides ways to maintain state and persistence in LLM-based applications.
+
+4. Use Cases:
+   LangGraph can be used for various applications, including:
+   - Conversational agents
+   - Complex task automation
+   - Custom LLM-backed experiences
+
+5. Integration:
+   LangGraph works in conjunction with LangSmith, another tool by LangChain, to provide an out-of-the-box solution for building complex, production-ready features with LLMs.
+
+6. Significance:
+...
+   LangGraph is noted to offer unique benefits compared to other LLM frameworks, particularly in its ability to handle cycles, provide controllability, and maintain persistence.
+
+LangGraph appears to be a significant tool in the evolving landscape of LLM-based application development, offering developers new ways to create more complex, stateful, and interactive AI systems.
+Goodbye!
+Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...
+9. Use prebuilts¶
+
+For ease of use, adjust your code to replace the following with LangGraph prebuilt components. These have built in functionality like parallel API execution.
+
+BasicToolNode is replaced with the prebuilt ToolNode
+route_tools is replaced with the prebuilt tools_condition
+
+OpenAI
+Anthropic
+Azure
+Google Gemini
+AWS Bedrock
+
+pip install -U "langchain[openai]"
+
+import os
+from langchain.chat_models import init_chat_model
+
+os.environ["OPENAI_API_KEY"] = "sk-..."
+
+llm = init_chat_model("openai:gpt-4.1")
+
+
+from typing import Annotated
+
+from langchain_tavily import TavilySearch
+from langchain_core.messages import BaseMessage
+from typing_extensions import TypedDict
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+
+graph_builder = StateGraph(State)
+
+tool = TavilySearch(max_results=2)
+tools = [tool]
+llm_with_tools = llm.bind_tools(tools)
+
+def chatbot(state: State):
+    return {"messages": [llm_with_tools.invoke(state["messages"])]}
+
+graph_builder.add_node("chatbot", chatbot)
+
+tool_node = ToolNode(tools=[tool])
+graph_builder.add_node("tools", tool_node)
+
+graph_builder.add_conditional_edges(
+    "chatbot",
+    tools_condition,
+)
+# Any time a tool is called, we return to the chatbot to decide the next step
+graph_builder.add_edge("tools", "chatbot")
+graph_builder.add_edge(START, "chatbot")
+graph = graph_builder.compile()
+Congratulations! You've created a conversational agent in LangGraph that can use a search engine to retrieve updated information when needed. Now it can handle a wider range of user queries. To inspect all the steps your agent just took, check out this LangSmith trace.
+"
+
+Build a basic chatbot: 
+"
+Build a basic chatbot¶
+
+In this tutorial, you will build a basic chatbot. This chatbot is the basis for the following series of tutorials where you will progressively add more sophisticated capabilities, and be introduced to key LangGraph concepts along the way. Let’s dive in! 🌟
+
+Prerequisites¶
+
+Before you start this tutorial, ensure you have access to a LLM that supports tool-calling features, such as OpenAI, Anthropic, or Google Gemini.
+
+1. Install packages¶
+
+Install the required packages:
+
+
+pip install -U langgraph langsmith
+Tip
+Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph. For more information on how to get started, see LangSmith docs.
+
+2. Create a StateGraph¶
+
+Now you can create a basic chatbot using LangGraph. This chatbot will respond directly to user messages.
+
+Start by creating a StateGraph. A StateGraph object defines the structure of our chatbot as a "state machine". We'll add nodes to represent the llm and functions our chatbot can call and edges to specify how the bot should transition between these functions.
+
+API Reference: StateGraph | START | add_messages
+
+
+from typing import Annotated
+
+from typing_extensions import TypedDict
+
+from langgraph.graph import StateGraph, START
+from langgraph.graph.message import add_messages
+
+
+class State(TypedDict):
+    # Messages have the type "list". The `add_messages` function
+    # in the annotation defines how this state key should be updated
+    # (in this case, it appends messages to the list, rather than overwriting them)
+    messages: Annotated[list, add_messages]
+
+
+graph_builder = StateGraph(State)
+Our graph can now handle two key tasks:
+
+Each node can receive the current State as input and output an update to the state.
+Updates to messages will be appended to the existing list rather than overwriting it, thanks to the prebuilt add_messages function used with the Annotated syntax.
+Concept
+When defining a graph, the first step is to define its State. The State includes the graph's schema and reducer functions that handle state updates. In our example, State is a TypedDict with one key: messages. The add_messages reducer function is used to append new messages to the list instead of overwriting it. Keys without a reducer annotation will overwrite previous values. To learn more about state, reducers, and related concepts, see LangGraph reference docs.
+
+3. Add a node¶
+
+Next, add a "chatbot" node. Nodes represent units of work and are typically regular Python functions.
+
+Let's first select a chat model:
+
+
+OpenAI
+Anthropic
+Azure
+Google Gemini
+AWS Bedrock
+
+pip install -U "langchain[openai]"
+
+import os
+from langchain.chat_models import init_chat_model
+
+os.environ["OPENAI_API_KEY"] = "sk-..."
+
+llm = init_chat_model("openai:gpt-4.1")
+
+We can now incorporate the chat model into a simple node:
+
+
+def chatbot(state: State):
+    return {"messages": [llm.invoke(state["messages"])]}
+
+
+# The first argument is the unique node name
+# The second argument is the function or object that will be called whenever
+# the node is used.
+graph_builder.add_node("chatbot", chatbot)
+Notice how the chatbot node function takes the current State as input and returns a dictionary containing an updated messages list under the key "messages". This is the basic pattern for all LangGraph node functions.
+
+The add_messages function in our State will append the LLM's response messages to whatever messages are already in the state.
+
+4. Add an entry point¶
+
+Add an entry point to tell the graph where to start its work each time it is run:
+
+
+graph_builder.add_edge(START, "chatbot")
+5. Compile the graph¶
+
+Before running the graph, we'll need to compile it. We can do so by calling compile() on the graph builder. This creates a CompiledGraph we can invoke on our state.
+
+
+graph = graph_builder.compile()
+6. Visualize the graph (optional)¶
+
+You can visualize the graph using the get_graph method and one of the "draw" methods, like draw_ascii or draw_png. The draw methods each require additional dependencies.
+
+
+from IPython.display import Image, display
+
+try:
+    display(Image(graph.get_graph().draw_mermaid_png()))
+except Exception:
+    # This requires some extra dependencies and is optional
+    pass
+basic chatbot diagram
+
+7. Run the chatbot¶
+
+Now run the chatbot!
+
+Tip
+You can exit the chat loop at any time by typing quit, exit, or q.
+
+
+def stream_graph_updates(user_input: str):
+    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
+        for value in event.values():
+            print("Assistant:", value["messages"][-1].content)
+
+
+while True:
+    try:
+        user_input = input("User: ")
+        if user_input.lower() in ["quit", "exit", "q"]:
+            print("Goodbye!")
+            break
+        stream_graph_updates(user_input)
+    except:
+        # fallback if input() is not available
+        user_input = "What do you know about LangGraph?"
+        print("User: " + user_input)
+        stream_graph_updates(user_input)
+        break
+
+Assistant: LangGraph is a library designed to help build stateful multi-agent applications using language models. It provides tools for creating workflows and state machines to coordinate multiple AI agents or language model interactions. LangGraph is built on top of LangChain, leveraging its components while adding graph-based coordination capabilities. It's particularly useful for developing more complex, stateful AI applications that go beyond simple query-response interactions.
+Goodbye!
+Congratulations! You've built your first chatbot using LangGraph. This bot can engage in basic conversation by taking user input and generating responses using an LLM. You can inspect a LangSmith Trace for the call above.
+
+Below is the full code for this tutorial:
+
+API Reference: init_chat_model | StateGraph | START | add_messages
+
+
+from typing import Annotated
+
+from langchain.chat_models import init_chat_model
+from typing_extensions import TypedDict
+
+from langgraph.graph import StateGraph, START
+from langgraph.graph.message import add_messages
+
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+graph_builder = StateGraph(State)
+
+
+llm = init_chat_model("anthropic:claude-3-5-sonnet-latest")
+
+
+def chatbot(state: State):
+    return {"messages": [llm.invoke(state["messages"])]}
+
+
+# The first argument is the unique node name
+# The second argument is the function or object that will be called whenever
+# the node is used.
+graph_builder.add_node("chatbot", chatbot)
+graph_builder.add_edge(START, "chatbot")
+graph = graph_builder.compile()
+"
+
+Memory:
+"
+Add memory¶
+
+The chatbot can now use tools to answer user questions, but it does not remember the context of previous interactions. This limits its ability to have coherent, multi-turn conversations.
+
+LangGraph solves this problem through persistent checkpointing. If you provide a checkpointer when compiling the graph and a thread_id when calling your graph, LangGraph automatically saves the state after each step. When you invoke the graph again using the same thread_id, the graph loads its saved state, allowing the chatbot to pick up where it left off.
+
+We will see later that checkpointing is much more powerful than simple chat memory - it lets you save and resume complex state at any time for error recovery, human-in-the-loop workflows, time travel interactions, and more. But first, let's add checkpointing to enable multi-turn conversations.
+
+Note
+This tutorial builds on Add tools.
+
+1. Create a MemorySaver checkpointer¶
+
+Create a MemorySaver checkpointer:
+
+
+from langgraph.checkpoint.memory import MemorySaver
+
+memory = MemorySaver()
+This is in-memory checkpointer, which is convenient for the tutorial. However, in a production application, you would likely change this to use SqliteSaver or PostgresSaver and connect a database.
+
+2. Compile the graph¶
+
+Compile the graph with the provided checkpointer, which will checkpoint the State as the graph works through each node:
+
+
+graph = graph_builder.compile(checkpointer=memory)
+
+from IPython.display import Image, display
+
+try:
+    display(Image(graph.get_graph().draw_mermaid_png()))
+except Exception:
+    # This requires some extra dependencies and is optional
+    pass
+3. Interact with your chatbot¶
+
+Now you can interact with your bot!
+
+Pick a thread to use as the key for this conversation.
+
+
+config = {"configurable": {"thread_id": "1"}}
+Call your chatbot:
+
+
+user_input = "Hi there! My name is Will."
+
+# The config is the **second positional argument** to stream() or invoke()!
+events = graph.stream(
+    {"messages": [{"role": "user", "content": user_input}]},
+    config,
+    stream_mode="values",
+)
+for event in events:
+    event["messages"][-1].pretty_print()
+
+================================ Human Message =================================
+
+Hi there! My name is Will.
+================================== Ai Message ==================================
+
+Hello Will! It's nice to meet you. How can I assist you today? Is there anything specific you'd like to know or discuss?
+Note
+The config was provided as the second positional argument when calling our graph. It importantly is not nested within the graph inputs ({'messages': []}).
+
+4. Ask a follow up question¶
+
+Ask a follow up question:
+
+
+user_input = "Remember my name?"
+
+# The config is the **second positional argument** to stream() or invoke()!
+events = graph.stream(
+    {"messages": [{"role": "user", "content": user_input}]},
+    config,
+    stream_mode="values",
+)
+for event in events:
+    event["messages"][-1].pretty_print()
+
+================================ Human Message =================================
+
+Remember my name?
+================================== Ai Message ==================================
+
+Of course, I remember your name, Will. I always try to pay attention to important details that users share with me. Is there anything else you'd like to talk about or any questions you have? I'm here to help with a wide range of topics or tasks.
+Notice that we aren't using an external list for memory: it's all handled by the checkpointer! You can inspect the full execution in this LangSmith trace to see what's going on.
+
+Don't believe me? Try this using a different config.
+
+
+# The only difference is we change the `thread_id` here to "2" instead of "1"
+events = graph.stream(
+    {"messages": [{"role": "user", "content": user_input}]},
+    {"configurable": {"thread_id": "2"}},
+    stream_mode="values",
+)
+for event in events:
+    event["messages"][-1].pretty_print()
+
+================================ Human Message =================================
+
+Remember my name?
+================================== Ai Message ==================================
+
+I apologize, but I don't have any previous context or memory of your name. As an AI assistant, I don't retain information from past conversations. Each interaction starts fresh. Could you please tell me your name so I can address you properly in this conversation?
+Notice that the only change we've made is to modify the thread_id in the config. See this call's LangSmith trace for comparison.
+
+5. Inspect the state¶
+
+By now, we have made a few checkpoints across two different threads. But what goes into a checkpoint? To inspect a graph's state for a given config at any time, call get_state(config).
+
+
+snapshot = graph.get_state(config)
+snapshot
+
+StateSnapshot(values={'messages': [HumanMessage(content='Hi there! My name is Will.', additional_kwargs={}, response_metadata={}, id='8c1ca919-c553-4ebf-95d4-b59a2d61e078'), AIMessage(content="Hello Will! It's nice to meet you. How can I assist you today? Is there anything specific you'd like to know or discuss?", additional_kwargs={}, response_metadata={'id': 'msg_01WTQebPhNwmMrmmWojJ9KXJ', 'model': 'claude-3-5-sonnet-20240620', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'input_tokens': 405, 'output_tokens': 32}}, id='run-58587b77-8c82-41e6-8a90-d62c444a261d-0', usage_metadata={'input_tokens': 405, 'output_tokens': 32, 'total_tokens': 437}), HumanMessage(content='Remember my name?', additional_kwargs={}, response_metadata={}, id='daba7df6-ad75-4d6b-8057-745881cea1ca'), AIMessage(content="Of course, I remember your name, Will. I always try to pay attention to important details that users share with me. Is there anything else you'd like to talk about or any questions you have? I'm here to help with a wide range of topics or tasks.", additional_kwargs={}, response_metadata={'id': 'msg_01E41KitY74HpENRgXx94vag', 'model': 'claude-3-5-sonnet-20240620', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'input_tokens': 444, 'output_tokens': 58}}, id='run-ffeaae5c-4d2d-4ddb-bd59-5d5cbf2a5af8-0', usage_metadata={'input_tokens': 444, 'output_tokens': 58, 'total_tokens': 502})]}, next=(), config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1ef7d06e-93e0-6acc-8004-f2ac846575d2'}}, metadata={'source': 'loop', 'writes': {'chatbot': {'messages': [AIMessage(content="Of course, I remember your name, Will. I always try to pay attention to important details that users share with me. Is there anything else you'd like to talk about or any questions you have? I'm here to help with a wide range of topics or tasks.", additional_kwargs={}, response_metadata={'id': 'msg_01E41KitY74HpENRgXx94vag', 'model': 'claude-3-5-sonnet-20240620', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'input_tokens': 444, 'output_tokens': 58}}, id='run-ffeaae5c-4d2d-4ddb-bd59-5d5cbf2a5af8-0', usage_metadata={'input_tokens': 444, 'output_tokens': 58, 'total_tokens': 502})]}}, 'step': 4, 'parents': {}}, created_at='2024-09-27T19:30:10.820758+00:00', parent_config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1ef7d06e-859f-6206-8003-e1bd3c264b8f'}}, tasks=())
+
+snapshot.next  # (since the graph ended this turn, `next` is empty. If you fetch a state from within a graph invocation, next tells which node will execute next)
+The snapshot above contains the current state values, corresponding config, and the next node to process. In our case, the graph has reached an END state, so next is empty.
+
+Congratulations! Your chatbot can now maintain conversation state across sessions thanks to LangGraph's checkpointing system. This opens up exciting possibilities for more natural, contextual interactions. LangGraph's checkpointing even handles arbitrarily complex graph states, which is much more expressive and powerful than simple chat memory.
+
+Check out the code snippet below to review the graph from this tutorial:
+
+
+OpenAI
+Anthropic
+Azure
+Google Gemini
+AWS Bedrock
+
+pip install -U "langchain[openai]"
+
+import os
+from langchain.chat_models import init_chat_model
+
+os.environ["OPENAI_API_KEY"] = "sk-..."
+
+llm = init_chat_model("openai:gpt-4.1")
+
+API Reference: init_chat_model | TavilySearch | BaseMessage | MemorySaver | StateGraph | add_messages | ToolNode | tools_condition
+
+
+from typing import Annotated
+
+from langchain.chat_models import init_chat_model
+from langchain_tavily import TavilySearch
+from langchain_core.messages import BaseMessage
+from typing_extensions import TypedDict
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+
+graph_builder = StateGraph(State)
+
+tool = TavilySearch(max_results=2)
+tools = [tool]
+llm_with_tools = llm.bind_tools(tools)
+
+def chatbot(state: State):
+    return {"messages": [llm_with_tools.invoke(state["messages"])]}
+
+graph_builder.add_node("chatbot", chatbot)
+
+tool_node = ToolNode(tools=[tool])
+graph_builder.add_node("tools", tool_node)
+
+graph_builder.add_conditional_edges(
+    "chatbot",
+    tools_condition,
+)
+graph_builder.add_edge("tools", "chatbot")
+graph_builder.set_entry_point("chatbot")
+memory = MemorySaver()
+graph = graph_builder.compile(checkpointer=memory)
+"
+
+Customize States: 
+"
+Customize state¶
+
+In this tutorial, you will add additional fields to the state to define complex behavior without relying on the message list. The chatbot will use its search tool to find specific information and forward them to a human for review.
+
+Note
+This tutorial builds on Add human-in-the-loop controls.
+
+1. Add keys to the state¶
+
+Update the chatbot to research the birthday of an entity by adding name and birthday keys to the state:
+
+API Reference: add_messages
+
+
+from typing import Annotated
+
+from typing_extensions import TypedDict
+
+from langgraph.graph.message import add_messages
+
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    name: str
+    birthday: str
+Adding this information to the state makes it easily accessible by other graph nodes (like a downstream node that stores or processes the information), as well as the graph's persistence layer.
+
+2. Update the state inside the tool¶
+
+Now, populate the state keys inside of the human_assistance tool. This allows a human to review the information before it is stored in the state. Use Command to issue a state update from inside the tool.
+
+
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import InjectedToolCallId, tool
+
+from langgraph.types import Command, interrupt
+
+@tool
+# Note that because we are generating a ToolMessage for a state update, we
+# generally require the ID of the corresponding tool call. We can use
+# LangChain's InjectedToolCallId to signal that this argument should not
+# be revealed to the model in the tool's schema.
+def human_assistance(
+    name: str, birthday: str, tool_call_id: Annotated[str, InjectedToolCallId]
+) -> str:
+    """Request assistance from a human."""
+    human_response = interrupt(
+        {
+            "question": "Is this correct?",
+            "name": name,
+            "birthday": birthday,
+        },
+    )
+    # If the information is correct, update the state as-is.
+    if human_response.get("correct", "").lower().startswith("y"):
+        verified_name = name
+        verified_birthday = birthday
+        response = "Correct"
+    # Otherwise, receive information from the human reviewer.
+    else:
+        verified_name = human_response.get("name", name)
+        verified_birthday = human_response.get("birthday", birthday)
+        response = f"Made a correction: {human_response}"
+
+    # This time we explicitly update the state with a ToolMessage inside
+    # the tool.
+    state_update = {
+        "name": verified_name,
+        "birthday": verified_birthday,
+        "messages": [ToolMessage(response, tool_call_id=tool_call_id)],
+    }
+    # We return a Command object in the tool to update our state.
+    return Command(update=state_update)
+The rest of the graph stays the same.
+
+3. Prompt the chatbot¶
+
+Prompt the chatbot to look up the "birthday" of the LangGraph library and direct the chatbot to reach out to the human_assistance tool once it has the required information. By setting name and birthday in the arguments for the tool, you force the chatbot to generate proposals for these fields.
+
+
+user_input = (
+    "Can you look up when LangGraph was released? "
+    "When you have the answer, use the human_assistance tool for review."
+)
+config = {"configurable": {"thread_id": "1"}}
+
+events = graph.stream(
+    {"messages": [{"role": "user", "content": user_input}]},
+    config,
+    stream_mode="values",
+)
+for event in events:
+    if "messages" in event:
+        event["messages"][-1].pretty_print()
+
+================================ Human Message =================================
+
+Can you look up when LangGraph was released? When you have the answer, use the human_assistance tool for review.
+================================== Ai Message ==================================
+
+[{'text': "Certainly! I'll start by searching for information about LangGraph's release date using the Tavily search function. Then, I'll use the human_assistance tool for review.", 'type': 'text'}, {'id': 'toolu_01JoXQPgTVJXiuma8xMVwqAi', 'input': {'query': 'LangGraph release date'}, 'name': 'tavily_search_results_json', 'type': 'tool_use'}]
+Tool Calls:
+  tavily_search_results_json (toolu_01JoXQPgTVJXiuma8xMVwqAi)
+ Call ID: toolu_01JoXQPgTVJXiuma8xMVwqAi
+  Args:
+    query: LangGraph release date
+================================= Tool Message =================================
+Name: tavily_search_results_json
+
+[{"url": "https://blog.langchain.dev/langgraph-cloud/", "content": "We also have a new stable release of LangGraph. By LangChain 6 min read Jun 27, 2024 (Oct '24) Edit: Since the launch of LangGraph Platform, we now have multiple deployment options alongside LangGraph Studio - which now fall under LangGraph Platform. LangGraph Platform is synonymous with our Cloud SaaS deployment option."}, {"url": "https://changelog.langchain.com/announcements/langgraph-cloud-deploy-at-scale-monitor-carefully-iterate-boldly", "content": "LangChain - Changelog | ☁ 🚀 LangGraph Platform: Deploy at scale, monitor LangChain LangSmith LangGraph LangChain LangSmith LangGraph LangChain LangSmith LangGraph LangChain Changelog Sign up for our newsletter to stay up to date DATE: The LangChain Team LangGraph LangGraph Platform ☁ 🚀 LangGraph Platform: Deploy at scale, monitor carefully, iterate boldly DATE: June 27, 2024 AUTHOR: The LangChain Team LangGraph Platform is now in closed beta, offering scalable, fault-tolerant deployment for LangGraph agents. LangGraph Platform also includes a new playground-like studio for debugging agent failure modes and quick iteration: Join the waitlist today for LangGraph Platform. And to learn more, read our blog post announcement or check out our docs. Subscribe By clicking subscribe, you accept our privacy policy and terms and conditions."}]
+================================== Ai Message ==================================
+
+[{'text': "Based on the search results, it appears that LangGraph was already in existence before June 27, 2024, when LangGraph Platform was announced. However, the search results don't provide a specific release date for the original LangGraph. \n\nGiven this information, I'll use the human_assistance tool to review and potentially provide more accurate information about LangGraph's initial release date.", 'type': 'text'}, {'id': 'toolu_01JDQAV7nPqMkHHhNs3j3XoN', 'input': {'name': 'Assistant', 'birthday': '2023-01-01'}, 'name': 'human_assistance', 'type': 'tool_use'}]
+Tool Calls:
+  human_assistance (toolu_01JDQAV7nPqMkHHhNs3j3XoN)
+ Call ID: toolu_01JDQAV7nPqMkHHhNs3j3XoN
+  Args:
+    name: Assistant
+    birthday: 2023-01-01
+We've hit the interrupt in the human_assistance tool again.
+
+4. Add human assistance¶
+
+The chatbot failed to identify the correct date, so supply it with information:
+
+
+human_command = Command(
+    resume={
+        "name": "LangGraph",
+        "birthday": "Jan 17, 2024",
+    },
+)
+
+events = graph.stream(human_command, config, stream_mode="values")
+for event in events:
+    if "messages" in event:
+        event["messages"][-1].pretty_print()
+
+================================== Ai Message ==================================
+
+[{'text': "Based on the search results, it appears that LangGraph was already in existence before June 27, 2024, when LangGraph Platform was announced. However, the search results don't provide a specific release date for the original LangGraph. \n\nGiven this information, I'll use the human_assistance tool to review and potentially provide more accurate information about LangGraph's initial release date.", 'type': 'text'}, {'id': 'toolu_01JDQAV7nPqMkHHhNs3j3XoN', 'input': {'name': 'Assistant', 'birthday': '2023-01-01'}, 'name': 'human_assistance', 'type': 'tool_use'}]
+Tool Calls:
+  human_assistance (toolu_01JDQAV7nPqMkHHhNs3j3XoN)
+ Call ID: toolu_01JDQAV7nPqMkHHhNs3j3XoN
+  Args:
+    name: Assistant
+    birthday: 2023-01-01
+================================= Tool Message =================================
+Name: human_assistance
+
+Made a correction: {'name': 'LangGraph', 'birthday': 'Jan 17, 2024'}
+================================== Ai Message ==================================
+
+Thank you for the human assistance. I can now provide you with the correct information about LangGraph's release date.
+
+LangGraph was initially released on January 17, 2024. This information comes from the human assistance correction, which is more accurate than the search results I initially found.
+
+To summarize:
+1. LangGraph's original release date: January 17, 2024
+2. LangGraph Platform announcement: June 27, 2024
+
+It's worth noting that LangGraph had been in development and use for some time before the LangGraph Platform announcement, but the official initial release of LangGraph itself was on January 17, 2024.
+Note that these fields are now reflected in the state:
+
+
+snapshot = graph.get_state(config)
+
+{k: v for k, v in snapshot.values.items() if k in ("name", "birthday")}
+
+{'name': 'LangGraph', 'birthday': 'Jan 17, 2024'}
+This makes them easily accessible to downstream nodes (e.g., a node that further processes or stores the information).
+
+5. Manually update the state¶
+
+LangGraph gives a high degree of control over the application state. For instance, at any point (including when interrupted), you can manually override a key using graph.update_state:
+
+
+graph.update_state(config, {"name": "LangGraph (library)"})
+
+{'configurable': {'thread_id': '1',
+  'checkpoint_ns': '',
+  'checkpoint_id': '1efd4ec5-cf69-6352-8006-9278f1730162'}}
+6. View the new value¶
+
+If you call graph.get_state, you can see the new value is reflected:
+
+
+snapshot = graph.get_state(config)
+
+{k: v for k, v in snapshot.values.items() if k in ("name", "birthday")}
+
+{'name': 'LangGraph (library)', 'birthday': 'Jan 17, 2024'}
+Manual state updates will generate a trace in LangSmith. If desired, they can also be used to control human-in-the-loop workflows. Use of the interrupt function is generally recommended instead, as it allows data to be transmitted in a human-in-the-loop interaction independently of state updates.
+
+Congratulations! You've added custom keys to the state to facilitate a more complex workflow, and learned how to generate state updates from inside tools.
+
+Check out the code snippet below to review the graph from this tutorial:
+
+
+OpenAI
+Anthropic
+Azure
+Google Gemini
+AWS Bedrock
+
+pip install -U "langchain[openai]"
+
+import os
+from langchain.chat_models import init_chat_model
+
+os.environ["OPENAI_API_KEY"] = "sk-..."
+
+llm = init_chat_model("openai:gpt-4.1")
+
+API Reference: TavilySearch | ToolMessage | InjectedToolCallId | tool | MemorySaver | StateGraph | START | END | add_messages | ToolNode | tools_condition | Command | interrupt
+
+
+from typing import Annotated
+
+from langchain_tavily import TavilySearch
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import InjectedToolCallId, tool
+from typing_extensions import TypedDict
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.types import Command, interrupt
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    name: str
+    birthday: str
+
+@tool
+def human_assistance(
+    name: str, birthday: str, tool_call_id: Annotated[str, InjectedToolCallId]
+) -> str:
+    """Request assistance from a human."""
+    human_response = interrupt(
+        {
+            "question": "Is this correct?",
+            "name": name,
+            "birthday": birthday,
+        },
+    )
+    if human_response.get("correct", "").lower().startswith("y"):
+        verified_name = name
+        verified_birthday = birthday
+        response = "Correct"
+    else:
+        verified_name = human_response.get("name", name)
+        verified_birthday = human_response.get("birthday", birthday)
+        response = f"Made a correction: {human_response}"
+
+    state_update = {
+        "name": verified_name,
+        "birthday": verified_birthday,
+        "messages": [ToolMessage(response, tool_call_id=tool_call_id)],
+    }
+    return Command(update=state_update)
+
+
+tool = TavilySearch(max_results=2)
+tools = [tool, human_assistance]
+llm_with_tools = llm.bind_tools(tools)
+
+def chatbot(state: State):
+    message = llm_with_tools.invoke(state["messages"])
+    assert(len(message.tool_calls) <= 1)
+    return {"messages": [message]}
+
+graph_builder = StateGraph(State)
+graph_builder.add_node("chatbot", chatbot)
+
+tool_node = ToolNode(tools=tools)
+graph_builder.add_node("tools", tool_node)
+
+graph_builder.add_conditional_edges(
+    "chatbot",
+    tools_condition,
+)
+graph_builder.add_edge("tools", "chatbot")
+graph_builder.add_edge(START, "chatbot")
+
+memory = MemorySaver()
+graph = graph_builder.compile(checkpointer=memory)
+"

@@ -1,7 +1,6 @@
 from config import DEEPSEEK_API_KEY, ANTHROPIC_API_KEY
 from langchain_deepseek import ChatDeepSeek
 from langchain_anthropic import ChatAnthropic
-from tools import tools as tool_list
 
 __all__ = ["get_llm"]
 
@@ -14,10 +13,6 @@ llm_deepseek = ChatDeepSeek(
     max_tokens=8192,
 )
 
-if tool_list:
-    llm_deepseek.bind_tools(tool_list)
-
-
 # Initialize Claude LLM with tools
 llm_claude = ChatAnthropic(
     api_key=ANTHROPIC_API_KEY,
@@ -26,14 +21,8 @@ llm_claude = ChatAnthropic(
     max_tokens=1024,
 )
 
-if tool_list:
-    llm_claude.bind_tools(tool_list)
 
 def get_llm(model_name: str):
-    """
-    Return the appropriate LLM instance based on model_name.
-    Supported models: "DeepSeek", "Claude".
-    """
     if model_name == "DeepSeek":
         return llm_deepseek
     elif model_name == "Claude":
