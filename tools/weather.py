@@ -2,8 +2,8 @@ import requests
 from langchain_core.tools import tool
 import logging
 
-# Configure basic logging to capture messages
-logging.basicConfig(level=logging.DEBUG)
+# Use a named logger for this module
+logger = logging.getLogger(__name__)
 
 # --- Add these debug logs ---
 logging.debug(f"--- DEBUG [weather.py] ---")
@@ -25,14 +25,14 @@ def weather_tool(location: str) -> str:
     params = {"q": location, "format": "json", "limit": 1}
     try: # Add try-except for network requests
         geocode_resp = requests.get(geocode_url, params=params,
-                                    headers={"User-Agent": NWS_USER_AGENT}, timeout=10) # Added timeout
+                                    headers={"User-Agent": NWS_USER_AGENT}, timeout=10)
         geocode_resp.raise_for_status() # Will raise an HTTPError for bad responses (4XX or 5XX)
         geo = geocode_resp.json()
     except requests.exceptions.RequestException as e: # Use logging for errors
-        logging.error(f"Error during geocoding: {e}")
+        logger.error(f"Error during geocoding: {e}")
         return f"Error during geocoding: {e}"
     except ValueError as e: # Handles JSON decoding errors, use logging
-        logging.error(f"Error decoding geocoding JSON response: {e}")
+        logger.error(f"Error decoding geocoding JSON response: {e}")
         return f"Error decoding geocoding JSON response: {e}"
 
     if not geo:
@@ -40,7 +40,7 @@ def weather_tool(location: str) -> str:
     
     # It's possible for geo[0] to not exist if geo is an empty list but not None
     if not isinstance(geo, list) or len(geo) == 0 or "lat" not in geo[0] or "lon" not in geo[0]:
-        logging.warning(f"Geocoding result for '{location}' is malformed or missing lat/lon: {geo}")
+        logger.warning(f"Geocoding result for '{location}' is malformed or missing lat/lon: {geo}")
         return f"Geocoding result for '{location}' is malformed or missing lat/lon."
         
     lat, lon = geo[0]["lat"], geo[0]["lon"]
@@ -53,7 +53,7 @@ def weather_tool(location: str) -> str:
         points_resp.raise_for_status()
         points_data = points_resp.json() # Use logging for errors
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching NWS points data: {e}")
+        logger.error(f"Error fetching NWS points data: {e}")
         return f"Error fetching NWS points data: {e}"
     except ValueError as e: # Handles JSON decoding errors, use logging
         return f"Error decoding NWS points JSON response: {e}"
@@ -70,7 +70,7 @@ def weather_tool(location: str) -> str:
         forecast_resp.raise_for_status()
         forecast_data = forecast_resp.json() # Use logging for errors
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching NWS forecast: {e}")
+        logger.error(f"Error fetching NWS forecast: {e}")
         return f"Error fetching NWS forecast: {e}"
     except ValueError as e: # Handles JSON decoding errors, use logging
         return f"Error decoding NWS forecast JSON response: {e}"
@@ -96,10 +96,10 @@ def weather_tool(location: str) -> str:
     if isinstance(raw_updated_time, str) and len(raw_updated_time) >= 19:
         updated = raw_updated_time[:19].replace("T", " ")
     else:
-        logging.warning(f"Could not parse timestamp from NWS data: {raw_updated_time}")
+        logger.warning(f"Could not parse timestamp from NWS data: {raw_updated_time}")
         updated = "Timestamp N/A"
         
     return f"{name}: {short}, {temp}°{unit} (as of {updated} UTC)"
 # Add this for debugging:
 if __name__ != "__main__": # Only print when imported
-    logging.debug(f"Checking weather_tool directly in weather.py: hasattr(weather_tool, '_tool_config') = {hasattr(weather_tool, '_tool_config')}")
+    logger.debug(f"Checking weather_tool directly in weather.py: hasattr(weather_tool, '_tool_config') = {hasattr(weather_tool, '_tool_config')}")

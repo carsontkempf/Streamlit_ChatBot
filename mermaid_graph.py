@@ -3,40 +3,68 @@ from streamlit_mermaid import st_mermaid
 from typing import List
 
 def build_mermaid(tool_entries: List[dict]) -> str:
-    # tool_entries: list of dicts with keys 'name', 'input', 'output'
-    nodes = []
-    edges = []
-    # start node
-    mermaid_code = "graph LR;\nstart((start));\nend_node((end));\n"
-    for i, entry in enumerate(tool_entries):
-        node_id = f"tool{i}"
-        entry_name = entry.get("name", "Unknown Step")
+    if not tool_entries:
+        return "mindmap\n  root((No tool invocation steps to graph.))"
 
-        if entry_name == "tool_determination_router":
-            # Special formatting for the router step
-            prompt_short = str(entry.get("router_llm_prompt", "N/A"))[:50] + "..." # Keep it brief for the graph
-            response_short = str(entry.get("router_llm_raw_response", "N/A"))[:50] + "..."
-            selected_list = entry.get("selected_tools_list", [])
-            label = (f"{entry_name}\\n"
-                       f"Prompt: {prompt_short.replace('"', '\\"')}\\n"
-                       f"Raw Resp: {response_short.replace('"', '\\"')}\\n"
-                       f"Selected: {str(selected_list).replace('"', '\\"')}")
-        else:
-            # Standard formatting for other tools/steps
-            tool_input_str = str(entry.get("tool_input", "N/A")).replace('"', '\\"')
-            tool_output_str = str(entry.get("tool_output", "N/A")).replace('"', '\\"')
-            label = f"{entry_name}\\nIn: {tool_input_str}\\nOut: {tool_output_str}"
+    mermaid_lines = ["mindmap"]
+    # Add a root node for the mindmap.
+    # Shapes can be: ((circle)), (rounded), [square], default (no brackets)
+    mermaid_lines.append("  root((Tool Invocation Flow))") # Main root, level 1 (indent "  ")
 
-        nodes.append(f'{node_id}["{label}"];')
-        if i == 0:
-            edges.append(f"start --> {node_id};")
-        else:
-            edges.append(f"tool{i-1} --> {node_id};")
-    # connect last tool to end
+    # Helper to sanitize text and optionally truncate
+    def sanitize(text: str, max_len: int = 0) -> str:
+        s = str(text)
+        if max_len > 0 and len(s) > max_len:
+            s = s[:max_len-3] + "..."
+        # Mindmap simple text nodes handle newlines naturally.
+        # Avoid characters that might break simple line-based parsing.
+        # For now, assume content is relatively clean.
+        return s
+
+    # Recursively build the mindmap structure
+    # parent_node_level is the indent level of the parent under which the current entries_subset will be added.
+    def build_nodes_recursively(entries_subset: List[dict], parent_node_level: int):
+        if not entries_subset:
+            return
+
+        entry = entries_subset[0]
+        remaining_entries = entries_subset[1:]
+        
+        # Current tool's node level
+        tool_node_level = parent_node_level + 1
+        tool_node_indent = "  " * tool_node_level
+        
+        entry_name = sanitize(entry.get("name", "Unknown Step"))
+        mermaid_lines.append(f"{tool_node_indent}{entry_name}")
+
+        # Details as children of this tool node
+        detail_node_level = tool_node_level + 1
+        detail_node_indent = "  " * detail_node_level
+        
+        original_entry_name = entry.get("name", "Unknown Step") # Use original for condition
+        if original_entry_name == "tool_determination_router":
+            prompt = sanitize(entry.get("router_llm_prompt", "N/A"), 100)
+            raw_resp = sanitize(entry.get("router_llm_raw_response", "N/A"), 100)
+            selected_tools = sanitize(str(entry.get("selected_tools_list", [])), 100)
+            mermaid_lines.append(f"{detail_node_indent}LLM Prompt: {prompt}")
+            mermaid_lines.append(f"{detail_node_indent}LLM Raw Resp: {raw_resp}")
+            mermaid_lines.append(f"{detail_node_indent}Selected Tools: {selected_tools}")
+        else: # Standard tool
+            tool_input = sanitize(entry.get("tool_input", "N/A"), 70)
+            tool_output = sanitize(entry.get("tool_output", "N/A"), 70)
+            mermaid_lines.append(f"{detail_node_indent}Input: {tool_input}")
+            mermaid_lines.append(f"{detail_node_indent}Output: {tool_output}")
+
+        # Add next tool as a child of the current tool node
+        if remaining_entries:
+            # The next tool is a child of the current tool node.
+            # So, its parent is the current tool node (at tool_node_level).
+            build_nodes_recursively(remaining_entries, tool_node_level)
+
     if tool_entries:
-        edges.append(f"tool{len(tool_entries)-1} --> end_node;")
-    mermaid_code += "\n".join(nodes + edges)
-    return mermaid_code
+        build_nodes_recursively(tool_entries, 1) # Initial parent is "root" at level 1
+
+    return "\n".join(mermaid_lines)
 
 def render_graph(tool_entries: List[dict]):
     if not tool_entries: # Add a check for empty tool_entries

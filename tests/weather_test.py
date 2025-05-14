@@ -12,17 +12,15 @@ import subprocess
 import os
 import signal
 from pathlib import Path
-import pyperclip # Added for clipboard functionality
-import psutil # Added for process management
+import pyperclip
+import psutil
 import logging
+import threading # Added for subprocess output streaming
+import sys # Added for flushing output
 
 
-# --- Configure Logging Levels for External Libraries ---
-# Set higher logging levels for noisy libraries to reduce verbosity in test output.
-# This affects the pytest runner's process where Selenium commands are issued.
 logging.getLogger("selenium.webdriver.remote.remote_connection").setLevel(logging.WARNING)
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
-# Suppress initial DEBUG messages from Selenium's service and driver finder
 logging.getLogger("selenium.webdriver.common.service").setLevel(logging.WARNING)
 logging.getLogger("selenium.webdriver.common.driver_finder").setLevel(logging.WARNING)
 
@@ -36,9 +34,6 @@ SUBMIT_BUTTON_LOCATOR = (By.XPATH, "//button[.//p[text()='Submit']]")
 
 
 def kill_process_on_port(port: int):
-    """Finds and terminates a process listening on the given port."""
-    # Only fetch attributes that as_dict can handle directly.
-    # We will call proc.connections() method separately.
     for proc in psutil.process_iter(['pid', 'name']):
         try:
             for conn in proc.net_connections(kind='inet'):
@@ -46,17 +41,26 @@ def kill_process_on_port(port: int):
                     print(f"--- Found process {proc.info['name']} (PID: {proc.info['pid']}) listening on port {port}. Terminating. ---")
                     try:
                         process_to_kill = psutil.Process(proc.info['pid'])
-                        process_to_kill.terminate() # Send SIGTERM
-                        process_to_kill.wait(timeout=3) # Wait for graceful termination
-                        print(f"--- Process {proc.info['pid']} terminated. ---")
+                        process_to_kill.terminate()
+                        process_to_kill.wait(timeout=3)
                     except psutil.NoSuchProcess:
-                        print(f"--- Process {proc.info['pid']} already terminated. ---")
+                        pass
                     except psutil.TimeoutExpired:
-                        print(f"--- Process {proc.info['pid']} did not terminate gracefully, killing. ---")
-                        process_to_kill.kill() # Send SIGKILL
+                        process_to_kill.kill()
                         process_to_kill.wait(timeout=3)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass # Process might have died or we don't have permissions
+            pass
+
+# Function to stream subprocess output
+def stream_output(pipe, prefix=""):
+    try:
+        for line in iter(pipe.readline, b''):
+            print(f"{prefix}{line.decode(errors='replace').strip()}", flush=True) # Ensure immediate printing
+    except Exception as e:
+        print(f"{prefix}Error streaming output: {e}", flush=True)
+    finally:
+        if hasattr(pipe, 'close') and not pipe.closed:
+            pipe.close()
 
 @pytest.fixture(scope="session") # Run once per test session
 def streamlit_server():
@@ -66,29 +70,47 @@ def streamlit_server():
         "--server.port", "8501"
     ]
     
-    process = None
+    process = None # Initialize process to None
+    stdout_thread = None
+    stderr_thread = None
+
     try:
         kill_process_on_port(8501)
-
+        print(f"\n--- [pytest fixture streamlit_server] Attempting to start Streamlit server with command: {' '.join(command)} ---", flush=True)
         # Start the Streamlit server as a subprocess
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=APP_DIRECTORY, preexec_fn=os.setsid)
+        process = subprocess.Popen(
+            command, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            cwd=APP_DIRECTORY, 
+            preexec_fn=os.setsid,
+            bufsize=1,  # Line buffered
+            universal_newlines=False # Keep as bytes for readline to work correctly with iter
+        )
         
-        time.sleep(5) 
+        # Start threads to stream stdout and stderr
+        # Pass sys.stdout directly if you want to bypass pytest's per-test capture for these streams
+        # However, printing with a prefix is generally better for distinguishing logs.
+        stdout_thread = threading.Thread(target=stream_output, args=(process.stdout, "STREAMLIT_STDOUT: "), daemon=True)
+        stderr_thread = threading.Thread(target=stream_output, args=(process.stderr, "STREAMLIT_STDERR: "), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        print("--- [pytest fixture streamlit_server] Waiting for Streamlit server to initialize (5s)... ---", flush=True)
+        time.sleep(5) # Give server time to start
 
         if process.poll() is not None:
-            # Capture stdout and stderr for debugging
-            stdout, stderr = process.communicate() # Reads all output and waits for process to terminate
+            # Server failed to start, threads might have printed some output already
             error_message = f"Streamlit server failed to start. Return code: {process.returncode}\n"
-            if stdout:
-                error_message += f"Stdout:\n{stdout.decode(errors='replace')}\n"
-            if stderr:
-                error_message += f"Stderr:\n{stderr.decode(errors='replace')}\n"
+            # stdout and stderr are being streamed by threads.
+            print(f"--- [pytest fixture streamlit_server] {error_message} ---", flush=True)
             raise RuntimeError(
                 error_message
             )
-        
+        print("--- [pytest fixture streamlit_server] Streamlit server presumed started. Yielding process. ---", flush=True)
         yield process 
-        
+        print("--- [pytest fixture streamlit_server] Test session finished. Cleaning up Streamlit server. ---", flush=True)
+
     finally:
         if process and process.poll() is None: # Check if process is still running
             try:
@@ -108,6 +130,13 @@ def streamlit_server():
                     pass
                 except Exception:
                     pass
+        
+        # Wait for streaming threads to finish by joining them
+        if stdout_thread and stdout_thread.is_alive():
+            stdout_thread.join(timeout=2) # Add timeout to join
+        if stderr_thread and stderr_thread.is_alive():
+            stderr_thread.join(timeout=2) # Add timeout to join
+        print("--- [pytest fixture streamlit_server] Cleanup complete. ---", flush=True)
 
 @pytest.fixture
 def driver():
@@ -172,8 +201,6 @@ def test_fill_form_and_submit(streamlit_server, driver):
     submit_button = WebDriverWait(driver, 6).until(EC.element_to_be_clickable(SUBMIT_BUTTON_LOCATOR))
     submit_button.click()
 
-    # Check for a general "Error:" message quickly after submission.
-    # If a general error isn't found quickly, we'll proceed to the more specific check.
     post_submission_error_message = get_error_text_if_present(driver, error_start_phrase, error_end_phrase, timeout=5) # Reduced timeout to 5 seconds
 
     if post_submission_error_message:
