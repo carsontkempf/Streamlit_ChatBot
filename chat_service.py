@@ -2,10 +2,11 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from lang_graph import agent_graph
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+# Logging is configured in lang_graph.py or app.py, avoid re-configuring here.
+# logging.basicConfig(level=logging.DEBUG)
 
 # Configure basic logging to capture messages
-def chat_fn(message: str) -> dict:
+def chat_fn(message: str, llm_name: str) -> dict:
     """
     Invokes the LangGraph agent with the user message.
     Extracts tool usage information for logging and visualization.

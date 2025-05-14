@@ -1,6 +1,7 @@
 import streamlit as st
 from mermaid_graph import render_graph
 # from typing import List # Not strictly needed if not type hinting elsewhere in this file
+
 def display_title():
     st.title("🧠 LLM Chat with Tool Routing")
 
@@ -60,10 +61,18 @@ def ui_main(chat_fn):
     if "log" not in st.session_state:
         st.session_state["log"] = []
     session_log = st.session_state["log"]
+
     display_title()
+
+    # Add LLM selection widget
+    llm_choice = st.selectbox(
+        "Choose LLM:",
+        ("DeepSeek", "Claude") # Options for LLMs
+    )
+
     user_input = get_user_input()
     if st.button("Submit") and user_input.strip():
-        entry = chat_fn(user_input)
+        entry = chat_fn(user_input, llm_choice) # Pass the selected LLM name
         session_log.append(entry)
         # Ensure "tool_entries" exists and is a list before rendering
         tool_entries_for_graph = entry.get("tool_entries", [])

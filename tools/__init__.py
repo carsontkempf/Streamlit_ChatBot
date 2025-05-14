@@ -35,25 +35,28 @@ for _, module_name, is_pkg in pkgutil.iter_modules(__path__):
             logger.debug(f"--- [{__name__}]   Member: {name}, Type: {type(obj)} ---")
 
             # Check if the object is an instance of BaseTool (which @tool decorated functions become)
-            # and also adheres to our naming convention.
             if isinstance(obj, BaseTool):
-                logger.debug(f"--- [{__name__}] Member '{name}' is an instance of BaseTool. Checking naming convention. ---")
-                if name.endswith("_tool"): # Ensure we only add actual tools by convention
+                # The 'name' from inspect.getmembers is the Python identifier.
+                # The 'obj.name' is the name LangChain assigns to the tool, often derived from the function name.
+                # We should rely on obj.name for the LangChain tool's actual name if available,
+                # but the Python identifier 'name' is what we use for the _tool suffix convention.
+                tool_lc_name = getattr(obj, 'name', 'N/A')
+                logger.debug(f"--- [{__name__}] Member '{name}' (Python identifier) is an instance of BaseTool. LangChain tool name: '{tool_lc_name}'. Checking suffix convention for '{name}'. ---")
+
+                if name.endswith("_tool"): # Convention based on Python function/identifier name
                     logger.info(f"--- [{__name__}] SUCCESS: Found and adding tool: '{name}' (Type: {type(obj)}) from module '{module_name}' ---")
                     
-                    # Log details of the StructuredTool instance
-                    tool_name_attr = getattr(obj, 'name', 'N/A')
                     tool_desc_attr = getattr(obj, 'description', 'N/A')
                     tool_args_schema_attr = getattr(obj, 'args_schema', None)
                     args_schema_str = tool_args_schema_attr.schema() if tool_args_schema_attr else 'None'
-                    logger.debug(f"--- [{__name__}] Tool '{name}' details: Name='{tool_name_attr}', Desc='{tool_desc_attr}', ArgsSchema={args_schema_str}")
+                    logger.debug(f"--- [{__name__}] Tool '{name}' details: LC Name='{tool_lc_name}', Desc='{tool_desc_attr}', ArgsSchema={args_schema_str}")
 
                     tool_box[name] = obj # Add to tool_box dictionary
                     __all__.append(name)
                 else:
-                    logger.warning(f"--- [{__name__}] Member '{name}' (Type: {type(obj)}) is a BaseTool but does not end with '_tool'. Skipping. ---")
+                    logger.warning(f"--- [{__name__}] Member '{name}' (Python identifier) (LC Name: '{tool_lc_name}', Type: {type(obj)}) is a BaseTool but Python identifier does not end with '_tool'. Skipping. ---")
             elif name.endswith("_tool") and callable(obj) and not isinstance(obj, BaseTool):
-                logger.warning(f"--- [{__name__}] Member '{name}' in '{module_name}' ends with _tool and is callable, but is NOT a BaseTool instance (Type: {type(obj)}). Check decorator. ---")
+                logger.warning(f"--- [{__name__}] Member '{name}' (Python identifier) in '{module_name}' ends with _tool and is callable, but is NOT a BaseTool instance (Type: {type(obj)}). Check decorator. ---")
 
     except ImportError as e: # Catch ImportError specifically
         logger.error(f"--- [{__name__}] ImportError when importing module {module_name} (tried as {full_module_name}): {e} ---", exc_info=True)

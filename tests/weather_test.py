@@ -198,7 +198,7 @@ def test_fill_form_and_submit(streamlit_server, driver):
     time.sleep(0.75)
     
     # Find the submit button and click it
-    submit_button = WebDriverWait(driver, 6).until(EC.element_to_be_clickable(SUBMIT_BUTTON_LOCATOR))
+    submit_button = WebDriverWait(driver, 2).until(EC.element_to_be_clickable(SUBMIT_BUTTON_LOCATOR))
     submit_button.click()
 
     post_submission_error_message = get_error_text_if_present(driver, error_start_phrase, error_end_phrase, timeout=5) # Reduced timeout to 5 seconds

@@ -1,6 +1,10 @@
 import streamlit as st
 from streamlit_mermaid import st_mermaid
 from typing import List
+import logging # Import the logging module
+
+# Get a logger instance for this module
+logger = logging.getLogger(__name__)
 
 def build_mermaid(tool_entries: List[dict]) -> str:
     if not tool_entries:
@@ -12,13 +16,23 @@ def build_mermaid(tool_entries: List[dict]) -> str:
     mermaid_lines.append("  root((Tool Invocation Flow))") # Main root, level 1 (indent "  ")
 
     # Helper to sanitize text and optionally truncate
-    def sanitize(text: str, max_len: int = 0) -> str:
-        s = str(text)
+    def sanitize_for_simple_mindmap_node(text: str, max_len: int = 0) -> str:
+        s = str(text)  # Ensure it's a string
+
+        # For simple mindmap nodes, we need to be very careful with characters
+        # that might be interpreted as Mermaid syntax.
+        # Replace characters that could break simple text node parsing.
+        s = s.replace("`", "'") # Replace backticks with single quotes
+        s = s.replace('"', "'") # Replace double quotes with single quotes
+        # Replace characters that define shapes or structures in Mermaid
+        for char_to_replace in "(){}[]:;#":
+            s = s.replace(char_to_replace, "_") # Replace with underscore or remove
+
+        # Newlines are not allowed in simple text node definitions, replace with space or similar
+        s = s.replace("\n", " ")
+
         if max_len > 0 and len(s) > max_len:
-            s = s[:max_len-3] + "..."
-        # Mindmap simple text nodes handle newlines naturally.
-        # Avoid characters that might break simple line-based parsing.
-        # For now, assume content is relatively clean.
+            s = s[:max_len - 3] + "..."
         return s
 
     # Recursively build the mindmap structure
@@ -34,7 +48,8 @@ def build_mermaid(tool_entries: List[dict]) -> str:
         tool_node_level = parent_node_level + 1
         tool_node_indent = "  " * tool_node_level
         
-        entry_name = sanitize(entry.get("name", "Unknown Step"))
+        # Tool name as a simple node (less likely to have problematic characters)
+        entry_name = sanitize_for_simple_mindmap_node(str(entry.get("name", "Unknown Step")), 50)
         mermaid_lines.append(f"{tool_node_indent}{entry_name}")
 
         # Details as children of this tool node
@@ -43,17 +58,26 @@ def build_mermaid(tool_entries: List[dict]) -> str:
         
         original_entry_name = entry.get("name", "Unknown Step") # Use original for condition
         if original_entry_name == "tool_determination_router":
-            prompt = sanitize(entry.get("router_llm_prompt", "N/A"), 100)
-            raw_resp = sanitize(entry.get("router_llm_raw_response", "N/A"), 100)
-            selected_tools = sanitize(str(entry.get("selected_tools_list", [])), 100)
-            mermaid_lines.append(f"{detail_node_indent}LLM Prompt: {prompt}")
-            mermaid_lines.append(f"{detail_node_indent}LLM Raw Resp: {raw_resp}")
-            mermaid_lines.append(f"{detail_node_indent}Selected Tools: {selected_tools}")
+            prompt = sanitize_for_simple_mindmap_node(entry.get("router_llm_prompt", "N/A"), 60)
+            raw_resp = sanitize_for_simple_mindmap_node(entry.get("router_llm_raw_response", "N/A"), 60)
+            selected_tools = sanitize_for_simple_mindmap_node(str(entry.get("selected_tools_list", [])), 60)
+            mermaid_lines.append(f'{detail_node_indent}LLM Prompt: {prompt}')
+            mermaid_lines.append(f'{detail_node_indent}LLM Raw Resp: {raw_resp}')
+            mermaid_lines.append(f'{detail_node_indent}Selected Tools: {selected_tools}')
         else: # Standard tool
-            tool_input = sanitize(entry.get("tool_input", "N/A"), 70)
-            tool_output = sanitize(entry.get("tool_output", "N/A"), 70)
-            mermaid_lines.append(f"{detail_node_indent}Input: {tool_input}")
-            mermaid_lines.append(f"{detail_node_indent}Output: {tool_output}")
+            tool_input_str = str(entry.get("tool_input", "N/A"))
+            tool_output_str = str(entry.get("tool_output", "N/A"))
+            
+            # Add "Input:" and "Output:" as simple text parent nodes for clarity
+            mermaid_lines.append(f'{detail_node_indent}Input Details:')
+            input_lines = tool_input_str.split('\n')
+            for line_num, line_content in enumerate(input_lines[:5]): # Show first 5 lines of input
+                mermaid_lines.append(f'{detail_node_indent}  {sanitize_for_simple_mindmap_node(line_content, 70)}')
+
+            mermaid_lines.append(f'{detail_node_indent}Output Details:')
+            output_lines = tool_output_str.split('\n')
+            for line_num, line_content in enumerate(output_lines[:8]): # Show first 8 lines of output
+                mermaid_lines.append(f'{detail_node_indent}  {sanitize_for_simple_mindmap_node(line_content, 70)}')
 
         # Add next tool as a child of the current tool node
         if remaining_entries:
@@ -71,5 +95,11 @@ def render_graph(tool_entries: List[dict]):
         st.caption("No tool invocation steps to graph.")
         return
     mermaid_code = build_mermaid(tool_entries)
+
+    # Log the generated Mermaid code for debugging
+    logger.debug(f"--- [mermaid_graph.py] Generated Mermaid Code Start ---")
+    logger.debug(mermaid_code)
+    logger.debug(f"--- [mermaid_graph.py] Generated Mermaid Code End ---")
+    st.text_area("Generated Mermaid Code (for debugging)", value=mermaid_code, height=300)
     st.caption("Invocation Graph")
-    st_mermaid(mermaid_code)
+    st_mermaid(mermaid_code, height="800px") # Added height parameter
