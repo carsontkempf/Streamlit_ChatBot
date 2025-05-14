@@ -193,7 +193,7 @@ def test_fill_form_and_submit(streamlit_server, driver):
     # Find the text area using the defined locator
     text_area = WebDriverWait(driver, 10).until(EC.presence_of_element_located(TEXT_AREA_LOCATOR))
     
-    text_area.send_keys("What is the weather like in Maryville, MO?")
+    text_area.send_keys("What is the latest news about the apple lawsuit in 2025?")
     
     time.sleep(0.75)
     
@@ -227,4 +227,4 @@ def test_fill_form_and_submit(streamlit_server, driver):
             print(f"\n--- Phrase '{no_tools_phrase.strip()}' not found. Test proceeds assuming tools were invoked or this message was not expected. ---\n")
 
     print("--- Test execution finished (no critical error found), browser will remain open for a few seconds. ---\n")
-    time.sleep(20)
+    time.sleep(60)
