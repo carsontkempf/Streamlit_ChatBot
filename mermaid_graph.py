@@ -1,9 +1,8 @@
 import streamlit as st
 from streamlit_mermaid import st_mermaid
 from typing import List
-import logging # Import the logging module
+import logging
 
-# Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
 # Counter for generating unique node IDs for Mermaid
@@ -19,26 +18,20 @@ def build_mermaid(tool_entries: List[dict]) -> str:
         return "mindmap\n  root((No tool invocation steps to graph.))"
 
     mermaid_lines = ["mindmap"]
-    # Add a root node for the mindmap.
-    # Shapes can be: ((circle)), (rounded), [square], default (no brackets)
-    mermaid_lines.append("  root((Tool Invocation Flow))") # Main root, level 1 (indent "  ")
+    mermaid_lines.append("  root((Tool Invocation Flow))")
 
     global _node_id_counter
-    _node_id_counter = 0 # Reset counter for each new graph generation
+    _node_id_counter = 0
 
-
-    # Helper to sanitize text and optionally truncate
     def sanitize_for_simple_mindmap_node(text: str, max_len: int = 0) -> str:
-        s = str(text)  # Ensure it's a string
+        s = str(text)
 
-        # For simple mindmap nodes, we need to be very careful with characters
-        # that might be interpreted as Mermaid syntax.
-        # Replace characters that could break simple text node parsing.
         s = s.replace("`", "'") # Replace backticks with single quotes
         s = s.replace('"', "'") # Replace double quotes with single quotes
+
         # Replace characters that define shapes or structures in Mermaid
         for char_to_replace in "(){}[]:;#":
-            s = s.replace(char_to_replace, "_") # Replace with underscore or remove
+            s = s.replace(char_to_replace, "_")
 
         # Newlines are not allowed in simple text node definitions, replace with space or similar
         s = s.replace("\n", " ")
@@ -47,7 +40,6 @@ def build_mermaid(tool_entries: List[dict]) -> str:
             s = s[:max_len - 3] + "..."
         return s
 
-    # Recursively build the mindmap structure
     # parent_node_level is the indent level of the parent under which the current entries_subset will be added.
     def build_nodes_recursively(entries_subset: List[dict], parent_node_level: int):
         if not entries_subset:
@@ -69,11 +61,8 @@ def build_mermaid(tool_entries: List[dict]) -> str:
         detail_node_level = tool_node_level + 1
         detail_node_indent = "  " * detail_node_level
         
-        original_entry_name = entry.get("name", "Unknown Step") # Use original for condition
-        # Note: The original code had a condition for "tool_determination_router"
-        # This example simplifies to the "else" block for brevity, assuming standard tool structure.
-        # If "tool_determination_router" has a different structure, apply similar id[text] changes there.
-        if original_entry_name == "tool_determination_router": # Example for router, adapt as needed
+        original_entry_name = entry.get("name", "Unknown Step")
+        if original_entry_name == "tool_determination_router":
             prompt = sanitize_for_simple_mindmap_node(entry.get("router_llm_prompt", "N/A"), 60)
             raw_resp = sanitize_for_simple_mindmap_node(entry.get("router_llm_raw_response", "N/A"), 60)
             selected_tools = sanitize_for_simple_mindmap_node(str(entry.get("selected_tools_list", [])), 60)
@@ -105,7 +94,6 @@ def build_mermaid(tool_entries: List[dict]) -> str:
         # Add next tool as a child of the current tool node
         if remaining_entries:
             # The next tool is a child of the current tool node.
-            # So, its parent is the current tool node (at tool_node_level).
             build_nodes_recursively(remaining_entries, tool_node_level)
 
     if tool_entries:
@@ -119,10 +107,7 @@ def render_graph(tool_entries: List[dict]):
         return
     mermaid_code = build_mermaid(tool_entries)
 
-    # Log the generated Mermaid code for debugging
-    logger.debug(f"--- [mermaid_graph.py] Generated Mermaid Code Start ---")
-    logger.debug(mermaid_code)
-    logger.debug(f"--- [mermaid_graph.py] Generated Mermaid Code End ---")
-    st.text_area("Generated Mermaid Code (for debugging)", value=mermaid_code, height=300)
+
+    st.text_area("Generated Mermaid Code:", value=mermaid_code, height=300)
     st.caption("Invocation Graph")
     st_mermaid(mermaid_code, height="800px") # Added height parameter

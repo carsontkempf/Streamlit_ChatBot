@@ -20,6 +20,9 @@ from .test_queries import USER_QUERIES # Import the queries
 import sys # Added for flushing output
 
 
+# --- Configuration for Verbose Debug Logging ---
+ENABLE_VERBOSE_DEBUG_LOGGING = False # Set to True to see detailed print statements
+
 logging.getLogger("selenium.webdriver.remote.remote_connection").setLevel(logging.WARNING)
 logging.getLogger("urllib3.connectionpool").setLevel(logging.WARNING)
 logging.getLogger("selenium.webdriver.common.service").setLevel(logging.WARNING)
@@ -39,7 +42,8 @@ def kill_process_on_port(port: int):
         try:
             for conn in proc.net_connections(kind='inet'):
                 if conn.laddr.port == port and conn.status == psutil.CONN_LISTEN:
-                    print(f"--- Found process {proc.info['name']} (PID: {proc.info['pid']}) listening on port {port}. Terminating. ---")
+                    if ENABLE_VERBOSE_DEBUG_LOGGING:
+                        print(f"--- Found process {proc.info['name']} (PID: {proc.info['pid']}) listening on port {port}. Terminating. ---")
                     try:
                         process_to_kill = psutil.Process(proc.info['pid'])
                         process_to_kill.terminate()
@@ -56,9 +60,11 @@ def kill_process_on_port(port: int):
 def stream_output(pipe, prefix=""):
     try:
         for line in iter(pipe.readline, b''):
-            print(f"{prefix}{line.decode(errors='replace').strip()}", flush=True) # Ensure immediate printing
+            if ENABLE_VERBOSE_DEBUG_LOGGING:
+                print(f"{prefix}{line.decode(errors='replace').strip()}", flush=True) # Ensure immediate printing
     except Exception as e:
-        print(f"{prefix}Error streaming output: {e}", flush=True)
+        if ENABLE_VERBOSE_DEBUG_LOGGING: # Log errors from streaming only if verbose
+            print(f"{prefix}Error streaming output: {e}", flush=True)
     finally:
         if hasattr(pipe, 'close') and not pipe.closed:
             pipe.close()
@@ -77,7 +83,8 @@ def streamlit_server():
 
     try:
         kill_process_on_port(8501)
-        print(f"\n--- [pytest fixture streamlit_server] Attempting to start Streamlit server with command: {' '.join(command)} ---", flush=True)
+        if ENABLE_VERBOSE_DEBUG_LOGGING:
+            print(f"\n--- [pytest fixture streamlit_server] Attempting to start Streamlit server with command: {' '.join(command)} ---", flush=True)
         # Start the Streamlit server as a subprocess
         process = subprocess.Popen(
             command, 
@@ -97,20 +104,24 @@ def streamlit_server():
         stdout_thread.start()
         stderr_thread.start()
 
-        print("--- [pytest fixture streamlit_server] Waiting for Streamlit server to initialize (5s)... ---", flush=True)
+        if ENABLE_VERBOSE_DEBUG_LOGGING:
+            print("--- [pytest fixture streamlit_server] Waiting for Streamlit server to initialize (5s)... ---", flush=True)
         time.sleep(5) # Give server time to start
 
         if process.poll() is not None:
             # Server failed to start, threads might have printed some output already
             error_message = f"Streamlit server failed to start. Return code: {process.returncode}\n"
             # stdout and stderr are being streamed by threads.
+            # This is a critical failure message, so it should always print.
             print(f"--- [pytest fixture streamlit_server] {error_message} ---", flush=True)
             raise RuntimeError(
                 error_message
             )
-        print("--- [pytest fixture streamlit_server] Streamlit server presumed started. Yielding process. ---", flush=True)
+        if ENABLE_VERBOSE_DEBUG_LOGGING:
+            print("--- [pytest fixture streamlit_server] Streamlit server presumed started. Yielding process. ---", flush=True)
         yield process 
-        print("--- [pytest fixture streamlit_server] Test session finished. Cleaning up Streamlit server. ---", flush=True)
+        if ENABLE_VERBOSE_DEBUG_LOGGING:
+            print("--- [pytest fixture streamlit_server] Test session finished. Cleaning up Streamlit server. ---", flush=True)
 
     finally:
         if process and process.poll() is None: # Check if process is still running
@@ -137,7 +148,8 @@ def streamlit_server():
             stdout_thread.join(timeout=2) # Add timeout to join
         if stderr_thread and stderr_thread.is_alive():
             stderr_thread.join(timeout=2) # Add timeout to join
-        print("--- [pytest fixture streamlit_server] Cleanup complete. ---", flush=True)
+        if ENABLE_VERBOSE_DEBUG_LOGGING:
+            print("--- [pytest fixture streamlit_server] Cleanup complete. ---", flush=True)
 
 @pytest.fixture
 def driver():
@@ -166,10 +178,12 @@ def get_error_text_if_present(driver: webdriver.Chrome, start_phrase: str, end_p
                 extracted_text = full_text[start_index:end_index].rstrip()
                 if extracted_text:  # Ensure there's something to copy
                     try:
-                        pyperclip.copy(extracted_text)
-                        print(f"\n\n\n\n\n--- UI Error text copied to clipboard. ---")
+                        pyperclip.copy(extracted_text) # type: ignore
+                        if ENABLE_VERBOSE_DEBUG_LOGGING:
+                            print(f"\n\n\n\n\n--- UI Error text copied to clipboard. ---")
                     except pyperclip.PyperclipException as e:
                         # This can happen in CI environments or if no clipboard utility is available
+                        # This is an important warning, so keep it.
                         print(f"\n\n\n\n\n--- Could not copy UI error text to clipboard: {e} ---")
                 return extracted_text
 
@@ -187,9 +201,11 @@ def test_fill_form_and_submit(streamlit_server, driver, user_query):
     # Initial check for errors on page load
     initial_error_message = get_error_text_if_present(driver, error_start_phrase, error_end_phrase, timeout=2) # Shorter timeout for initial check
     if initial_error_message:
+        # Critical failure, always print these details before pytest.fail
         print("\n\n--- Application Error Detected on Page Load ---\n\n")
         print(initial_error_message)
         print("\n\n---------------------------------------------\n")
+        # pytest.fail will also output its message.
         pytest.fail(f"Test failed because Streamlit app showed an error on initial load: {initial_error_message}", pytrace=False)
     
     # Find the text area using the defined locator
@@ -206,9 +222,11 @@ def test_fill_form_and_submit(streamlit_server, driver, user_query):
     post_submission_error_message = get_error_text_if_present(driver, error_start_phrase, error_end_phrase, timeout=5) # Reduced timeout to 5 seconds
 
     if post_submission_error_message:
+        # Critical failure, always print these details before pytest.fail
         print("\n\n--- Application Error Detected After Submission ---\n\n")
         print(post_submission_error_message)
         print("\n\n-------------------------------------------------\n")
+        # pytest.fail will also output its message.
         pytest.fail(f"Test failed because Streamlit returned an error after submission: {post_submission_error_message}", pytrace=False)
     else:
         no_tools_phrase = "No tool invocation steps to graph."
@@ -223,10 +241,13 @@ def test_fill_form_and_submit(streamlit_server, driver, user_query):
                 EC.text_to_be_present_in_element(caption_paragraph_locator, no_tools_phrase.strip())
             )
             # If the above line does not raise a TimeoutException, the phrase was found.
+            # This is a test failure condition, so the error message should always be available.
             error_message = f"Critical Error: Found phrase '{no_tools_phrase.strip()}' indicating no tools were used."
             pytest.fail(error_message, pytrace=False) # Instantly terminate and fail the test
         except TimeoutException:
-            print(f"\n--- Phrase '{no_tools_phrase.strip()}' not found. Test proceeds assuming tools were invoked or this message was not expected. ---\n")
+            if ENABLE_VERBOSE_DEBUG_LOGGING:
+                print(f"\n--- Phrase '{no_tools_phrase.strip()}' not found. Test proceeds assuming tools were invoked or this message was not expected. ---\n")
 
-    print("--- Test execution finished (no critical error found), browser will remain open for a few seconds. ---\n")
+    if ENABLE_VERBOSE_DEBUG_LOGGING:
+        print("--- Test execution finished (no critical error found), browser will remain open for a few seconds. ---\n")
     time.sleep(60)
